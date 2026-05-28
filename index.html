@@ -137,9 +137,10 @@
 
     svg#graph { overflow: visible; max-width: 520px; width: 100%; }
 
-    .edge { stroke: var(--border2); stroke-width: 1.5; fill: none; transition: stroke 0.3s, stroke-width 0.3s; }
-    .edge.active { stroke: var(--accent); stroke-width: 2.5; }
-    .edge.k-edge { stroke: var(--accent2); stroke-width: 2; }
+    .edge { stroke: var(--border2); stroke-width: 1.5; fill: none; transition: stroke 0.3s, stroke-width 0.3s, stroke-dasharray 0.3s, opacity 0.3s; }
+    .edge.active { stroke: var(--accent); stroke-width: 3; }
+    .edge.k-edge { stroke: var(--accent2); stroke-width: 2.5; }
+    .edge.is-discarded { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4; opacity: 0.4; }
     .edge-weight { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
 
     .node-circle {
@@ -271,9 +272,15 @@
   </div>
   <div id="config-bar">
     <select id="algo-select" onchange="changeConfig()">
-      <option value="fw">Floyd-Warshall</option>
-      <option value="dijkstra">Dijkstra</option>
-      <option value="astar">A* (A-Star)</option>
+      <optgroup label="Caminos Mínimos (Dirigido)">
+        <option value="fw">Floyd-Warshall</option>
+        <option value="dijkstra">Dijkstra</option>
+        <option value="astar">A* (A-Star)</option>
+      </optgroup>
+      <optgroup label="Árbol de Expansión Mínima (No Dirigido)">
+        <option value="kruskal">Kruskal</option>
+        <option value="prim">Prim</option>
+      </optgroup>
     </select>
     <select id="start-node" onchange="changeConfig()" style="display:none;">
       <option value="0">Origen: A</option>
@@ -369,8 +376,7 @@
 
     <div class="side-section">
       <div class="side-label">Referencias</div>
-      <div class="legend" id="legend-box">
-        </div>
+      <div class="legend" id="legend-box"></div>
     </div>
   </div>
 </main>
@@ -387,11 +393,22 @@
     { x: 382, y: 248 }
   ];
 
+  // Matriz dirigida
   const W = [
     [0,   3,   8,   INF],
     [INF, 0,   INF, 2  ],
     [INF, 4,   0,   1  ],
     [5,   INF, INF, 0  ]
+  ];
+
+  // Aristas no dirigidas para MST (Kruskal/Prim)
+  const MST_EDGES = [
+    { u: 0, v: 1, w: 3, id: 'e-0-1' },
+    { u: 0, v: 2, w: 8, id: 'e-0-2' },
+    { u: 1, v: 3, w: 2, id: 'e-1-3' },
+    { u: 2, v: 1, w: 4, id: 'e-2-1' },
+    { u: 3, v: 0, w: 5, id: 'e-3-0' },
+    { u: 2, v: 3, w: 1, id: 'e-2-3' }
   ];
 
   let steps = [];
@@ -404,157 +421,153 @@
     return Math.round(Math.sqrt(dx * dx + dy * dy) / 30); 
   }
 
-  /* ── Constructores de Pasos ── */
+  /* ── Constructores de Pasos (Caminos) ── */
   function buildFloydWarshall() {
     let s = [];
     let d = W.map(r => [...r]);
-    s.push({
-      dist: d.map(r=>[...r]), k:-1, i:-1, j:-1, updated:false,
-      msg: 'Inicialización: <span style="color:var(--accent)">dist[i][j]</span> = peso del arco i→j.',
-      pseudo: -1
-    });
+    s.push({ dist: d.map(r=>[...r]), k:-1, i:-1, j:-1, updated:false, msg: 'Inicialización: <span style="color:var(--accent)">dist[i][j]</span> = peso del arco i→j.', pseudo: -1 });
 
     for (let k = 0; k < N; k++) {
-      s.push({
-        dist: d.map(r=>[...r]), k, i:-1, j:-1, updated:false,
-        msg: `Intermediario <span class="tag tag-k">k = ${LBL[k]}</span>`,
-        pseudo: 0
-      });
+      s.push({ dist: d.map(r=>[...r]), k, i:-1, j:-1, updated:false, msg: `Intermediario <span class="tag tag-k">k = ${LBL[k]}</span>`, pseudo: 0 });
       for (let i = 0; i < N; i++) {
         for (let j = 0; j < N; j++) {
           if (i === j) continue;
           const via = (d[i][k] === INF || d[k][j] === INF) ? INF : d[i][k] + d[k][j];
           const updated = via < d[i][j];
           if (updated) d[i][j] = via;
-          s.push({
-            dist: d.map(r=>[...r]), k, i, j, updated,
-            msg: updated
-              ? `<span class="tag tag-upd">✓ Actualizado</span> dist[${LBL[i]}][${LBL[j]}] = <strong style="color:var(--accent)">${via}</strong>`
-              : `dist[${LBL[i]}][${LBL[j]}] = ${fmt(d[i][j])} — no mejora vía ${LBL[k]}.`,
-            pseudo: updated ? 5 : 3
-          });
+          s.push({ dist: d.map(r=>[...r]), k, i, j, updated, msg: updated ? `<span class="tag tag-upd">✓ Actualizado</span> dist[${LBL[i]}][${LBL[j]}] = <strong style="color:var(--accent)">${via}</strong>` : `dist[${LBL[i]}][${LBL[j]}] = ${fmt(d[i][j])} — no mejora vía ${LBL[k]}.`, pseudo: updated ? 5 : 3 });
         }
       }
     }
-    s.push({
-      dist: d.map(r=>[...r]), k:-1, i:-1, j:-1, updated:false,
-      msg: `<span class="tag tag-done">✓ Listo</span> Matrices calculadas.`,
-      pseudo: -1
-    });
+    s.push({ dist: d.map(r=>[...r]), k:-1, i:-1, j:-1, updated:false, msg: `<span class="tag tag-done">✓ Listo</span> Matrices calculadas.`, pseudo: -1 });
     return s;
   }
 
   function buildDijkstra(start) {
     let s = [];
-    let dist = Array(N).fill(INF);
-    let visited = Array(N).fill(false);
+    let dist = Array(N).fill(INF), visited = Array(N).fill(false);
     dist[start] = 0;
-
-    s.push({
-      dist: [...dist], visited: [...visited], u: -1, v: -1, updated: false,
-      msg: `Origen: <span class="tag tag-k">${LBL[start]}</span>.`,
-      pseudo: 0
-    });
+    s.push({ dist: [...dist], visited: [...visited], u: -1, v: -1, updated: false, msg: `Origen: <span class="tag tag-k">${LBL[start]}</span>.`, pseudo: 0 });
 
     for (let i = 0; i < N; i++) {
       let u = -1, minDist = INF;
-      for (let j = 0; j < N; j++) {
-        if (!visited[j] && dist[j] < minDist) { minDist = dist[j]; u = j; }
-      }
+      for (let j = 0; j < N; j++) { if (!visited[j] && dist[j] < minDist) { minDist = dist[j]; u = j; } }
       if (u === -1) break;
       visited[u] = true;
-
-      s.push({
-        dist: [...dist], visited: [...visited], u, v: -1, updated: false,
-        msg: `Visitamos <strong style="color:var(--accent2)">${LBL[u]}</strong> (dist: ${dist[u]}).`,
-        pseudo: 1
-      });
+      s.push({ dist: [...dist], visited: [...visited], u, v: -1, updated: false, msg: `Visitamos <strong style="color:var(--accent2)">${LBL[u]}</strong> (dist: ${dist[u]}).`, pseudo: 1 });
 
       for (let v = 0; v < N; v++) {
         if (W[u][v] !== INF && W[u][v] !== 0 && !visited[v]) {
           let alt = dist[u] + W[u][v];
           let updated = alt < dist[v];
           if (updated) dist[v] = alt;
-
-          s.push({
-            dist: [...dist], visited: [...visited], u, v, updated,
-            msg: updated
-              ? `<span class="tag tag-upd">✓ Actualizado</span> dist[${LBL[v]}] = <strong style="color:var(--accent)">${alt}</strong>`
-              : `Vecino ${LBL[v]}: ruta alternativa (${alt}) es mayor.`,
-            pseudo: updated ? 3 : 2
-          });
+          s.push({ dist: [...dist], visited: [...visited], u, v, updated, msg: updated ? `<span class="tag tag-upd">✓ Actualizado</span> dist[${LBL[v]}] = <strong style="color:var(--accent)">${alt}</strong>` : `Vecino ${LBL[v]}: ruta alternativa (${alt}) es mayor.`, pseudo: updated ? 3 : 2 });
         }
       }
     }
-    s.push({
-      dist: [...dist], visited: [...visited], u: -1, v: -1, updated: false,
-      msg: `<span class="tag tag-done">✓ Listo</span> Distancias mínimas desde ${LBL[start]}.`,
-      pseudo: -1
-    });
+    s.push({ dist: [...dist], visited: [...visited], u: -1, v: -1, updated: false, msg: `<span class="tag tag-done">✓ Listo</span> Distancias mínimas desde ${LBL[start]}.`, pseudo: -1 });
     return s;
   }
 
   function buildAStar(start, target) {
     let s = [];
-    let gScore = Array(N).fill(INF), fScore = Array(N).fill(INF);
-    let openSet = [start], closedSet = Array(N).fill(false);
+    let gScore = Array(N).fill(INF), fScore = Array(N).fill(INF), openSet = [start], closedSet = Array(N).fill(false);
     gScore[start] = 0; fScore[start] = heuristica(start, target);
-
-    s.push({
-      gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u: -1, v: -1, updated: false,
-      msg: `Origen: <span class="tag tag-k">${LBL[start]}</span>, Destino: <strong>${LBL[target]}</strong>.`,
-      pseudo: 0
-    });
+    s.push({ gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u: -1, v: -1, updated: false, msg: `Origen: <span class="tag tag-k">${LBL[start]}</span>, Destino: <strong>${LBL[target]}</strong>.`, pseudo: 0 });
 
     while (openSet.length > 0) {
       let currentIdx = 0;
-      for (let i = 1; i < openSet.length; i++) {
-        if (fScore[openSet[i]] < fScore[openSet[currentIdx]]) currentIdx = i;
-      }
+      for (let i = 1; i < openSet.length; i++) { if (fScore[openSet[i]] < fScore[openSet[currentIdx]]) currentIdx = i; }
       let u = openSet[currentIdx];
 
       if (u === target) {
-        s.push({
-          gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u, v: -1, updated: false,
-          msg: `<span class="tag tag-done">✓ Listo</span> Llegamos a <strong>${LBL[target]}</strong> (costo ${gScore[target]}).`,
-          pseudo: -1
-        });
+        s.push({ gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u, v: -1, updated: false, msg: `<span class="tag tag-done">✓ Listo</span> Llegamos a <strong>${LBL[target]}</strong> (costo ${gScore[target]}).`, pseudo: -1 });
         break;
       }
-
       openSet.splice(currentIdx, 1);
       closedSet[u] = true;
-
-      s.push({
-        gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u, v: -1, updated: false,
-        msg: `Evaluamos <strong style="color:var(--accent2)">${LBL[u]}</strong> (f(n) = ${fScore[u]}).`,
-        pseudo: 1
-      });
+      s.push({ gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u, v: -1, updated: false, msg: `Evaluamos <strong style="color:var(--accent2)">${LBL[u]}</strong> (f(n) = ${fScore[u]}).`, pseudo: 1 });
 
       for (let v = 0; v < N; v++) {
         if (W[u][v] !== INF && W[u][v] !== 0) {
           if (closedSet[v]) continue;
-          let tentative_gScore = gScore[u] + W[u][v];
-          let updated = false;
-
+          let tentative_gScore = gScore[u] + W[u][v], updated = false;
           if (!openSet.includes(v)) { openSet.push(v); updated = true; }
           else if (tentative_gScore < gScore[v]) { updated = true; }
 
           if (updated) {
-            gScore[v] = tentative_gScore;
-            fScore[v] = gScore[v] + heuristica(v, target);
+            gScore[v] = tentative_gScore; fScore[v] = gScore[v] + heuristica(v, target);
           }
-
-          s.push({
-            gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u, v, updated,
-            msg: updated
-              ? `<span class="tag tag-upd">✓ Actualizado</span> ${LBL[v]}: g(${gScore[v]})+h(${heuristica(v, target)})=f(<strong style="color:var(--accent)">${fScore[v]}</strong>)`
-              : `Ruta a ${LBL[v]} ignorada.`,
-            pseudo: updated ? 3 : 2
-          });
+          s.push({ gScore: [...gScore], fScore: [...fScore], closedSet: [...closedSet], openSet: [...openSet], u, v, updated, msg: updated ? `<span class="tag tag-upd">✓ Actualizado</span> ${LBL[v]}: g(${gScore[v]})+h(${heuristica(v, target)})=f(<strong style="color:var(--accent)">${fScore[v]}</strong>)` : `Ruta a ${LBL[v]} ignorada.`, pseudo: updated ? 3 : 2 });
         }
       }
     }
+    return s;
+  }
+
+  /* ── Constructores de Pasos (Árboles) ── */
+  function buildKruskal() {
+    let s = [];
+    let edges = [...MST_EDGES].sort((a,b) => a.w - b.w).map(e => ({...e, status: 'pending'}));
+    let parent = Array(N).fill(0).map((_,i) => i);
+    let mstEdges = [];
+    
+    function find(i) {
+      if (parent[i] === i) return i;
+      return parent[i] = find(parent[i]);
+    }
+
+    s.push({ edges: JSON.parse(JSON.stringify(edges)), parent: [...parent], mstEdges: [...mstEdges], u: -1, v: -1, msg: "Inicialización: Ordenamos las aristas por peso de menor a mayor.", pseudo: 0 });
+
+    for (let i = 0; i < edges.length; i++) {
+      let e = edges[i];
+      edges[i].status = 'evaluating';
+      s.push({ edges: JSON.parse(JSON.stringify(edges)), parent: [...parent], mstEdges: [...mstEdges], u: e.u, v: e.v, evalEdge: e, msg: `Evaluamos la arista <strong style="color:var(--accent2)">${LBL[e.u]}-${LBL[e.v]}</strong> (peso ${e.w}).`, pseudo: 1 });
+
+      let rootU = find(e.u);
+      let rootV = find(e.v);
+
+      if (rootU !== rootV) {
+        parent[rootU] = rootV;
+        mstEdges.push(e.id);
+        edges[i].status = 'mst';
+        s.push({ edges: JSON.parse(JSON.stringify(edges)), parent: [...parent], mstEdges: [...mstEdges], u: e.u, v: e.v, evalEdge: e, updated: true, msg: `<span class="tag tag-upd">✓ Añadida</span> No forma ciclo. Se añade al MST.`, pseudo: 3 });
+      } else {
+        edges[i].status = 'discarded';
+        s.push({ edges: JSON.parse(JSON.stringify(edges)), parent: [...parent], mstEdges: [...mstEdges], u: e.u, v: e.v, evalEdge: e, updated: false, msg: `Forma ciclo. Se <strong style="color:var(--danger)">descarta</strong>.`, pseudo: 4 });
+      }
+    }
+    s.push({ edges: JSON.parse(JSON.stringify(edges)), parent: [...parent], mstEdges: [...mstEdges], u: -1, v: -1, msg: `<span class="tag tag-done">✓ Listo</span> Árbol de Expansión Mínima completado.`, pseudo: -1 });
+    return s;
+  }
+
+  function buildPrim(start) {
+    let s = [];
+    let inMST = Array(N).fill(false);
+    let mstEdges = [];
+    inMST[start] = true;
+    
+    s.push({ inMST: [...inMST], mstEdges: [...mstEdges], frontier: [], u: start, v: -1, msg: `Iniciamos en el nodo <span class="tag tag-k">${LBL[start]}</span>.`, pseudo: 0 });
+
+    let edgesCount = 0;
+    while(edgesCount < N - 1) {
+      let frontier = MST_EDGES.filter(e => (inMST[e.u] && !inMST[e.v]) || (!inMST[e.u] && inMST[e.v]));
+      if(frontier.length === 0) break;
+
+      s.push({ inMST: [...inMST], mstEdges: [...mstEdges], frontier: frontier.map(e=>e.id), u: -1, v: -1, msg: `Buscamos la arista de menor peso que conecte el árbol con un nodo nuevo.`, pseudo: 1 });
+
+      frontier.sort((a,b) => a.w - b.w);
+      let minE = frontier[0];
+      let newNode = inMST[minE.u] ? minE.v : minE.u;
+      let mstNode = inMST[minE.u] ? minE.u : minE.v;
+
+      inMST[newNode] = true;
+      mstEdges.push(minE.id);
+      edgesCount++;
+
+      s.push({ inMST: [...inMST], mstEdges: [...mstEdges], frontier: frontier.map(e=>e.id), u: mstNode, v: newNode, evalEdge: minE, updated: true, msg: `<span class="tag tag-upd">✓ Añadida</span> Arista <strong style="color:var(--accent)">${LBL[minE.u]}-${LBL[minE.v]}</strong> seleccionada. Agregamos ${LBL[newNode]}.`, pseudo: 3 });
+    }
+    s.push({ inMST: [...inMST], mstEdges: [...mstEdges], frontier: [], u: -1, v: -1, msg: `<span class="tag tag-done">✓ Listo</span> Árbol de Expansión Mínima completado.`, pseudo: -1 });
     return s;
   }
 
@@ -609,6 +622,29 @@
       }
       h += '</table>';
     }
+    else if (currentAlgo === 'kruskal') {
+      document.getElementById('matrix-title').innerText = 'Aristas Ordenadas';
+      h += '<table class="matrix"><tr><th>Arista</th><th>Peso</th><th>Estado</th></tr>';
+      if(s.edges) s.edges.forEach(e => {
+          let statusIcon = e.status === 'mst' ? '✓' : e.status === 'discarded' ? '✗' : e.status === 'evaluating' ? '→' : '-';
+          let cls = e.status === 'mst' ? 'cell-upd' : e.status === 'discarded' ? 'cell-diag' : e.status === 'evaluating' ? 'cell-k' : '';
+          h += `<tr><th>${LBL[e.u]}-${LBL[e.v]}</th><td>${e.w}</td><td class="${cls}">${statusIcon}</td></tr>`;
+      });
+      h += '</table>';
+    }
+    else if (currentAlgo === 'prim') {
+      document.getElementById('matrix-title').innerText = 'Estado del Árbol';
+      h += '<table class="matrix"><tr><th>Nodo</th><th>En MST?</th></tr>';
+      for(let i=0; i<N; i++) {
+          let inM = s.inMST && s.inMST[i];
+          let cls = inM ? 'cell-upd' : '';
+          if(i === s.v && s.updated) cls = 'cell-upd'; // Recién añadido
+          else if(i === s.v) cls = 'cell-cur'; 
+          else if(i === s.u) cls = 'cell-k';
+          h += `<tr><th>${LBL[i]}</th><td class="${cls}">${inM ? 'Sí' : 'No'}</td></tr>`;
+      }
+      h += '</table>';
+    }
     document.getElementById('matrix-wrap').innerHTML = h;
   }
 
@@ -619,8 +655,7 @@
       { indent: 1, html: '<span class="kw">for</span> i <span class="kw">in</span> 0..n-1:' },
       { indent: 2, html: '<span class="kw">for</span> j <span class="kw">in</span> 0..n-1:' },
       { indent: 3, html: '<span class="kw">if</span> dist[i][k] <span class="sym">+</span> dist[k][j] <span class="sym"><</span> dist[i][j]:' },
-      { indent: 4, html: 'dist[i][j] <span class="sym">=</span> dist[i][k] <span class="sym">+</span> dist[k][j]' },
-      { indent: 4, html: '' }
+      { indent: 4, html: 'dist[i][j] <span class="sym">=</span> dist[i][k] <span class="sym">+</span> dist[k][j]' }
     ],
     dijkstra: [
       { indent: 0, html: 'dist[start] <span class="sym">=</span> 0' },
@@ -639,6 +674,22 @@
       { indent: 2, html: 'alt_g <span class="sym">=</span> gScore[u] <span class="sym">+</span> weight(u, v)' },
       { indent: 2, html: '<span class="kw">if</span> alt_g <span class="sym"><</span> gScore[v]:' },
       { indent: 3, html: 'gScore[v] <span class="sym">=</span> alt_g; fScore[v] <span class="sym">=</span> alt_g <span class="sym">+</span> h(v)' }
+    ],
+    kruskal: [
+      { indent: 0, html: 'edges <span class="sym">=</span> sort(all_edges)' },
+      { indent: 0, html: '<span class="kw">for</span> e <span class="kw">in</span> edges:' },
+      { indent: 1, html: '<span class="kw">if</span> find(e.u) <span class="sym">!=</span> find(e.v):' },
+      { indent: 2, html: 'union(e.u, e.v)' },
+      { indent: 2, html: 'mst.add(e)' },
+      { indent: 1, html: '<span class="kw">else</span>:' },
+      { indent: 2, html: '<span class="kw">continue</span> (discard)' }
+    ],
+    prim: [
+      { indent: 0, html: 'inMST[start] <span class="sym">=</span> true' },
+      { indent: 0, html: '<span class="kw">while</span> mst_edges <span class="sym"><</span> V - 1:' },
+      { indent: 1, html: 'e <span class="sym">=</span> min_edge(crosses MST boundary)' },
+      { indent: 1, html: 'inMST[e.new_node] <span class="sym">=</span> true' },
+      { indent: 1, html: 'mst.add(e)' }
     ]
   };
 
@@ -650,16 +701,20 @@
       if (s.pseudo === 0) activeLines = [0];
       if (s.pseudo === 3) activeLines = [3];
       if (s.pseudo === 5) activeLines = [3, 4];
-    } else if (currentAlgo === 'dijkstra') {
+    } else if (currentAlgo === 'dijkstra' || currentAlgo === 'astar') {
       if (s.pseudo === 0) activeLines = [0];
       if (s.pseudo === 1) activeLines = [2];
       if (s.pseudo === 2) activeLines = [4, 5];
       if (s.pseudo === 3) activeLines = [4, 5, 6];
-    } else if (currentAlgo === 'astar') {
+    } else if (currentAlgo === 'kruskal') {
       if (s.pseudo === 0) activeLines = [0];
-      if (s.pseudo === 1) activeLines = [2];
-      if (s.pseudo === 2) activeLines = [4, 5];
-      if (s.pseudo === 3) activeLines = [4, 5, 6];
+      if (s.pseudo === 1) activeLines = [1, 2];
+      if (s.pseudo === 3) activeLines = [3, 4];
+      if (s.pseudo === 4) activeLines = [5, 6];
+    } else if (currentAlgo === 'prim') {
+      if (s.pseudo === 0) activeLines = [0];
+      if (s.pseudo === 1) activeLines = [1, 2];
+      if (s.pseudo === 3) activeLines = [3, 4];
     }
 
     document.getElementById('pseudo-block').innerHTML = p.map((l, i) => {
@@ -673,50 +728,68 @@
     if (currentAlgo === 'fw') {
       h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(245,158,11,0.5)"></div>Intermediario (k)</div>`;
       h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(129,140,248,0.4)"></div>Par (i, j)</div>`;
-    } else {
+    } else if (currentAlgo === 'dijkstra' || currentAlgo === 'astar') {
       h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(245,158,11,0.5)"></div>Nodo actual (u)</div>`;
       h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(129,140,248,0.4)"></div>Vecino evaluado (v)</div>`;
       h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(107,114,128,0.3)"></div>Visitado / Cerrado</div>`;
+    } else if (currentAlgo === 'kruskal') {
+      h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(110,231,183,0.4)"></div>Arista en MST</div>`;
+      h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(245,158,11,0.5)"></div>Evaluando</div>`;
+      h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(107,114,128,0.3)"></div>Descartada (Ciclo)</div>`;
+    } else if (currentAlgo === 'prim') {
+      h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(110,231,183,0.4)"></div>Parte del MST</div>`;
+      h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(245,158,11,0.5)"></div>Arista Frontera / Evaluando</div>`;
     }
-    h += `<div class="legend-item"><div class="legend-dot" style="background:rgba(110,231,183,0.4)"></div>Distancia actualizada</div>`;
     document.getElementById('legend-box').innerHTML = h;
   }
 
   /* ── Highlight Graph ── */
   function renderGraph(s) {
     document.querySelectorAll('.node-circle').forEach(c => c.classList.remove('is-k','is-ij','is-closed'));
-    document.querySelectorAll('.edge').forEach(e => e.classList.remove('active','k-edge'));
+    document.querySelectorAll('.edge').forEach(e => e.classList.remove('active','k-edge','is-discarded'));
+
+    const isMST = currentAlgo === 'kruskal' || currentAlgo === 'prim';
+    document.querySelectorAll('.edge').forEach(e => {
+      if (isMST) e.removeAttribute('marker-end');
+      else e.setAttribute('marker-end', 'url(#arr)');
+    });
 
     if (currentAlgo === 'fw') {
       if (s.k >= 0) document.getElementById(`nc-${s.k}`).classList.add('is-k');
       if (s.i >= 0) document.getElementById(`nc-${s.i}`).classList.add('is-ij');
       if (s.j >= 0) document.getElementById(`nc-${s.j}`).classList.add('is-ij');
 
-      if (s.i >= 0 && s.k >= 0) {
-        [`e-${s.i}-${s.k}`, `e-${s.k}-${s.i}`].forEach(id => { let el = document.getElementById(id); if (el) el.classList.add('k-edge'); });
-      }
-      if (s.k >= 0 && s.j >= 0) {
-        [`e-${s.k}-${s.j}`, `e-${s.j}-${s.k}`].forEach(id => { let el = document.getElementById(id); if (el) el.classList.add('k-edge'); });
-      }
-      if (s.updated && s.i >= 0 && s.j >= 0) {
-        let el = document.getElementById(`e-${s.i}-${s.j}`);
-        if (el) { el.classList.remove('k-edge'); el.classList.add('active'); }
-      }
-    } else {
-      // Dijkstra / A*
+      if (s.i >= 0 && s.k >= 0) { [`e-${s.i}-${s.k}`, `e-${s.k}-${s.i}`].forEach(id => { let el = document.getElementById(id); if (el) el.classList.add('k-edge'); }); }
+      if (s.k >= 0 && s.j >= 0) { [`e-${s.k}-${s.j}`, `e-${s.j}-${s.k}`].forEach(id => { let el = document.getElementById(id); if (el) el.classList.add('k-edge'); }); }
+      if (s.updated && s.i >= 0 && s.j >= 0) { let el = document.getElementById(`e-${s.i}-${s.j}`); if (el) { el.classList.remove('k-edge'); el.classList.add('active'); } }
+    } 
+    else if (currentAlgo === 'dijkstra' || currentAlgo === 'astar') {
       if (s.visited) s.visited.forEach((vis, i) => { if(vis) document.getElementById(`nc-${i}`).classList.add('is-closed'); });
       if (s.closedSet) s.closedSet.forEach((vis, i) => { if(vis) document.getElementById(`nc-${i}`).classList.add('is-closed'); });
-      
       if (s.u >= 0) document.getElementById(`nc-${s.u}`).classList.add('is-k');
       if (s.v >= 0) document.getElementById(`nc-${s.v}`).classList.add('is-ij');
 
-      if (s.u >= 0 && s.v >= 0) {
-        let el = document.getElementById(`e-${s.u}-${s.v}`);
-        if (el) {
-          if (s.updated) el.classList.add('active');
-          else el.classList.add('k-edge');
-        }
+      if (s.u >= 0 && s.v >= 0) { let el = document.getElementById(`e-${s.u}-${s.v}`); if (el) { if (s.updated) el.classList.add('active'); else el.classList.add('k-edge'); } }
+    }
+    else if (currentAlgo === 'kruskal') {
+      if (s.mstEdges) s.mstEdges.forEach(id => { let el = document.getElementById(id); if(el) el.classList.add('active'); });
+      if (s.edges) {
+        s.edges.forEach(e => {
+          if (e.status === 'discarded') document.getElementById(e.id).classList.add('is-discarded');
+          if (e.status === 'evaluating') document.getElementById(e.id).classList.add('k-edge');
+        });
       }
+      if (s.u >= 0) document.getElementById(`nc-${s.u}`).classList.add('is-ij');
+      if (s.v >= 0) document.getElementById(`nc-${s.v}`).classList.add('is-ij');
+    }
+    else if (currentAlgo === 'prim') {
+      if (s.inMST) s.inMST.forEach((inM, i) => { if(inM) document.getElementById(`nc-${i}`).classList.add('is-closed'); });
+      if (s.mstEdges) s.mstEdges.forEach(id => { let el = document.getElementById(id); if(el) el.classList.add('active'); });
+      if (s.frontier) s.frontier.forEach(id => { let el = document.getElementById(id); if(el && !el.classList.contains('active')) el.classList.add('k-edge'); });
+      if (s.evalEdge) { let el = document.getElementById(s.evalEdge.id); if(el) { el.classList.remove('k-edge'); el.classList.add('active'); } }
+      
+      if (s.u >= 0) document.getElementById(`nc-${s.u}`).classList.add('is-k'); // Nodo conectado desde el MST
+      if (s.v >= 0) document.getElementById(`nc-${s.v}`).classList.add('is-ij'); // Nodo nuevo explorado
     }
   }
 
@@ -737,7 +810,7 @@
     const startNode = parseInt(document.getElementById('start-node').value);
     const targetNode = parseInt(document.getElementById('target-node').value);
     
-    document.getElementById('start-node').style.display = currentAlgo !== 'fw' ? 'inline-block' : 'none';
+    document.getElementById('start-node').style.display = (currentAlgo === 'fw' || currentAlgo === 'kruskal') ? 'none' : 'inline-block';
     document.getElementById('target-node').style.display = currentAlgo === 'astar' ? 'inline-block' : 'none';
 
     renderLegend();
@@ -745,6 +818,8 @@
     if (currentAlgo === 'fw') steps = buildFloydWarshall();
     else if (currentAlgo === 'dijkstra') steps = buildDijkstra(startNode);
     else if (currentAlgo === 'astar') steps = buildAStar(startNode, targetNode);
+    else if (currentAlgo === 'kruskal') steps = buildKruskal();
+    else if (currentAlgo === 'prim') steps = buildPrim(startNode);
 
     idx = 0;
     apply(0);
